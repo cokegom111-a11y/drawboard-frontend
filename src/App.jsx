@@ -376,7 +376,7 @@ export default function App() {
                         {cell.opened ? (
                           <div style={{ fontSize: result === "빈칸" ? 10 : 9, fontWeight: 900, lineHeight: 1.05 }}>{result}</div>
                         ) : (
-                          <svg viewBox="0 0 100 100" style={{ width: 16, height: 16, display: "block" }}>
+                          <svg viewBox="0 0 100 100" style={{ width: 20, height: 20, display: "block" }}>
                             <path d={buildStarPath()} fill="#ffea44" stroke="#f7d708" strokeWidth="4" />
                           </svg>
                         )}
