@@ -2,14 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
-const DEFAULT_USERS = ["user1", "user2", "user3", "user4", "user5"];
-
 const PRIZES = [
   { name: "1등", count: 1 },
   { name: "2등", count: 3 },
-  { name: "3등", count: 6 },
-  { name: "4등", count: 20 },
-  { name: "5등", count: 30 },
+  { name: "3등", count: 16 },
+  { name: "4등", count: 100 },
+  { name: "5등", count: 400 },
 ];
 
 const RESULT_STYLE = {
@@ -18,15 +16,10 @@ const RESULT_STYLE = {
   "3등": { bg: "linear-gradient(135deg, #ffe9dc 0%, #ffc39f 100%)", color: "#9e4d1b", border: "2px solid #ff9c61" },
   "4등": { bg: "linear-gradient(135deg, #f2ecff 0%, #d8c7ff 100%)", color: "#6a41c8", border: "2px solid #b797ff" },
   "5등": { bg: "linear-gradient(135deg, #e8fff3 0%, #b2efd0 100%)", color: "#0f7b4f", border: "2px solid #71d7aa" },
-  "빈칸": { bg: "linear-gradient(135deg, #f7f8fb 0%, #eceef6 100%)", color: "#6b7280", border: "2px solid #d1d5db" },
 };
 
 function buildStarPath() {
   return "M50 5 L61 35 L95 35 L67 55 L78 88 L50 68 L22 88 L33 55 L5 35 L39 35 Z";
-}
-
-function resultDisplay(result) {
-  return result || "빈칸";
 }
 
 async function api(path, options = {}) {
@@ -58,15 +51,20 @@ export default function App() {
   const boardRef = useRef(null);
   const audioRef = useRef(null);
 
-  const [loginId, setLoginId] = useState(DEFAULT_USERS[0]);
-  const [password, setPassword] = useState("1234");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
   const [me, setMe] = useState(null);
   const [board, setBoard] = useState([]);
   const [history, setHistory] = useState([]);
   const [lastOpened, setLastOpened] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
   const [showJackpot, setShowJackpot] = useState(false);
+  const [showChangePin, setShowChangePin] = useState(false);
 
   const stats = useMemo(() => {
     const summary = {};
@@ -75,10 +73,8 @@ export default function App() {
     });
     board.forEach((cell) => {
       if (!cell.result) return;
-      const key = resultDisplay(cell.result);
-      if (!summary[key]) return;
-      if (cell.opened) summary[key].opened += 1;
-      else summary[key].remain += 1;
+      if (cell.opened) summary[cell.result].opened += 1;
+      else summary[cell.result].remain += 1;
     });
     return {
       opened: board.filter((cell) => cell.opened).length,
@@ -154,10 +150,11 @@ export default function App() {
     try {
       const data = await api("/api/login", {
         method: "POST",
-        body: JSON.stringify({ username: loginId, password }),
+        body: JSON.stringify({ username, password }),
       });
       localStorage.setItem("drawboard_token", data.token);
       setMe(data.user);
+      setPassword("");
       await loadState();
     } catch (e2) {
       setError(String(e2.message || e2));
@@ -171,13 +168,33 @@ export default function App() {
     setBoard([]);
     setHistory([]);
     setLastOpened(null);
+    setUsername("");
+    setPassword("");
+    setSaveMessage("");
+    setShowChangePin(false);
   }
 
-  async function saveState(payload) {
-    await api("/api/board", {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
+  async function saveState(payload, showSuccess = false) {
+    setSaving(true);
+    setError("");
+    try {
+      await api("/api/board", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      if (showSuccess) {
+        setSaveMessage("저장되었습니다.");
+        setTimeout(() => setSaveMessage(""), 2500);
+      }
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleManualSave() {
+    await saveState({ board, lastOpened, history }, true);
   }
 
   async function openCell(slot) {
@@ -185,22 +202,15 @@ export default function App() {
     if (!hit || hit.opened) return;
 
     playClick();
-    const nextBoard = board.map((cell) => cell.slot === slot ? { ...cell, opened: true } : cell);
-    const nextLast = { slot: hit.slot, result: resultDisplay(hit.result) };
-    const nextHistory = [
-      { slot: hit.slot, result: resultDisplay(hit.result), createdAt: new Date().toISOString() },
-      ...history,
-    ].slice(0, 12);
+    const nextBoard = board.map((cell) => (cell.slot === slot ? { ...cell, opened: true } : cell));
+    const nextLast = { slot: hit.slot, result: hit.result };
+    const nextHistory = [{ slot: hit.slot, result: hit.result, createdAt: new Date().toISOString() }, ...history].slice(0, 12);
 
     setBoard(nextBoard);
     setLastOpened(nextLast);
     setHistory(nextHistory);
 
-    try {
-      await saveState({ board: nextBoard, lastOpened: nextLast, history: nextHistory });
-    } catch (e) {
-      setError(String(e.message || e));
-    }
+    await saveState({ board: nextBoard, lastOpened: nextLast, history: nextHistory }, false);
 
     if (hit.result) {
       setTimeout(() => playWin(hit.result), 70);
@@ -230,11 +240,7 @@ export default function App() {
     setBoard(nextBoard);
     setLastOpened(null);
     setHistory([]);
-    try {
-      await saveState({ board: nextBoard, lastOpened: null, history: [] });
-    } catch (e) {
-      setError(String(e.message || e));
-    }
+    await saveState({ board: nextBoard, lastOpened: null, history: [] }, true);
     if (boardRef.current) boardRef.current.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -248,7 +254,38 @@ export default function App() {
       setBoard(data.board || []);
       setHistory([]);
       setLastOpened(null);
+      setSaveMessage("새판이 저장되었습니다.");
+      setTimeout(() => setSaveMessage(""), 2500);
       if (boardRef.current) boardRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleChangePin(e) {
+    e.preventDefault();
+    if (!/^\d{4}$/.test(newPin)) {
+      setError("새 비밀번호는 숫자 4자리여야 합니다.");
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setError("새 비밀번호와 확인 비밀번호가 일치하지 않습니다.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await api("/api/change-password", {
+        method: "POST",
+        body: JSON.stringify({ newPassword: newPin }),
+      });
+      setSaveMessage("비밀번호가 변경되었습니다.");
+      setTimeout(() => setSaveMessage(""), 2500);
+      setNewPin("");
+      setConfirmPin("");
+      setShowChangePin(false);
     } catch (e) {
       setError(String(e.message || e));
     } finally {
@@ -263,18 +300,14 @@ export default function App() {
           <div style={loginHeaderStyle}>뽑기판 로그인</div>
           <form onSubmit={handleLogin} style={loginFormStyle}>
             <label style={fieldLabelStyle}>아이디</label>
-            <select value={loginId} onChange={(e) => setLoginId(e.target.value)} style={inputStyle}>
-              {DEFAULT_USERS.map((id) => <option key={id} value={id}>{id}</option>)}
-            </select>
+            <input value={username} onChange={(e) => setUsername(e.target.value)} style={inputStyle} placeholder="아이디 입력" autoComplete="username" />
 
             <label style={fieldLabelStyle}>비밀번호</label>
-            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" style={inputStyle} />
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" style={inputStyle} placeholder="비밀번호 4자리" autoComplete="current-password" maxLength={4} />
 
             <button type="submit" style={loginButtonStyle} disabled={loading}>
               {loading ? "접속 중..." : "접속하기"}
             </button>
-
-            <div style={loginHintStyle}>기본 계정: user1 ~ user5 / 비밀번호: 1234</div>
             {error ? <div style={errorStyle}>{error}</div> : null}
           </form>
         </div>
@@ -287,13 +320,7 @@ export default function App() {
       <AnimatePresence>
         {showJackpot && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={jackpotOverlayStyle}>
-            <motion.div
-              initial={{ scale: 0.72, rotate: -8 }}
-              animate={{ scale: 1, rotate: 0 }}
-              exit={{ scale: 0.84, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 220, damping: 16 }}
-              style={jackpotCardStyle}
-            >
+            <motion.div initial={{ scale: 0.72, rotate: -8 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0.84, opacity: 0 }} transition={{ type: "spring", stiffness: 220, damping: 16 }} style={jackpotCardStyle}>
               <div style={jackpotTopStyle}>🎉 1등 당첨 🎉</div>
               <div style={jackpotBottomStyle}>{lastOpened ? `${lastOpened.slot}번` : ""}</div>
             </motion.div>
@@ -310,8 +337,10 @@ export default function App() {
 
           <div style={buttonRowStyle}>
             <button onClick={randomOpen} style={primaryButtonStyle}>랜덤</button>
+            <button onClick={handleManualSave} style={saveButtonStyle}>{saving ? "저장중" : "저장하기"}</button>
             <button onClick={resetBoard} style={subButtonStyle}>초기화</button>
             <button onClick={remakeBoard} style={subButtonStyle}>새판</button>
+            <button onClick={() => setShowChangePin((v) => !v)} style={subButtonStyle}>비밀번호변경</button>
             <button onClick={logout} style={subButtonStyle}>로그아웃</button>
           </div>
 
@@ -323,15 +352,30 @@ export default function App() {
         </div>
 
         {error ? <div style={errorBannerStyle}>{error}</div> : null}
+        {saveMessage ? <div style={saveBannerStyle}>{saveMessage}</div> : null}
+
+        {showChangePin ? (
+          <div style={pinPanelStyle}>
+            <form onSubmit={handleChangePin} style={pinFormStyle}>
+              <div style={panelTitleStyle}>비밀번호 변경</div>
+              <input value={newPin} onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="새 비밀번호 4자리" style={inputStyle} maxLength={4} type="password" />
+              <input value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="비밀번호 확인" style={inputStyle} maxLength={4} type="password" />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="submit" style={primaryButtonStyle}>변경</button>
+                <button type="button" onClick={() => setShowChangePin(false)} style={subButtonStyle}>닫기</button>
+              </div>
+            </form>
+          </div>
+        ) : null}
 
         <div style={contentStyle}>
           <div style={sidePanelStyle}>
             <div style={panelTitleStyle}>최근 결과</div>
             {lastOpened ? (
-              <div style={{ ...resultCardStyle, ...(RESULT_STYLE[lastOpened.result] || RESULT_STYLE["빈칸"]) }}>
+              <div style={{ ...resultCardStyle, ...(RESULT_STYLE[lastOpened.result] || {}) }}>
                 <div style={{ fontSize: 10, opacity: 0.75 }}>최근 오픈</div>
-                <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>{lastOpened.slot}번</div>
-                <div style={{ fontSize: 18, fontWeight: 900, marginTop: 4 }}>{lastOpened.result}</div>
+                <div style={{ fontSize: 24, fontWeight: 900, marginTop: 4 }}>{lastOpened.slot}번</div>
+                <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>{lastOpened.result}</div>
               </div>
             ) : (
               <div style={emptyBoxStyle}>아직 결과 없음</div>
@@ -345,9 +389,7 @@ export default function App() {
                   <div key={`${item.slot}-${idx}`} style={historyRowStyle}>
                     <span style={historyTimeStyle}>{compactTime(item.createdAt)}</span>
                     <span style={historySlotStyle}>{item.slot}번</span>
-                    <span style={{ ...historyResultStyle, color: RESULT_STYLE[item.result]?.color || "#555" }}>
-                      {item.result}
-                    </span>
+                    <span style={{ ...historyResultStyle, color: RESULT_STYLE[item.result]?.color || "#555" }}>{item.result}</span>
                   </div>
                 ))
               )}
@@ -359,8 +401,7 @@ export default function App() {
               <div style={boardInnerStyle}>
                 <div style={boardGridStyle}>
                   {board.map((cell) => {
-                    const result = resultDisplay(cell.result);
-                    const style = cell.opened ? (RESULT_STYLE[result] || RESULT_STYLE["빈칸"]) : null;
+                    const style = cell.opened ? RESULT_STYLE[cell.result] : null;
                     return (
                       <button
                         key={cell.slot}
@@ -374,9 +415,9 @@ export default function App() {
                         }}
                       >
                         {cell.opened ? (
-                          <div style={{ fontSize: result === "빈칸" ? 10 : 9, fontWeight: 900, lineHeight: 1.05 }}>{result}</div>
+                          <div style={openedTextStyle}>{cell.result}</div>
                         ) : (
-                          <svg viewBox="0 0 100 100" style={{ width: 20, height: 20, display: "block" }}>
+                          <svg viewBox="0 0 100 100" style={{ width: 24, height: 24, display: "block" }}>
                             <path d={buildStarPath()} fill="#ffea44" stroke="#f7d708" strokeWidth="4" />
                           </svg>
                         )}
@@ -394,12 +435,10 @@ export default function App() {
               {PRIZES.map((prize) => (
                 <div key={prize.name} style={{ ...rankItemStyle, background: RESULT_STYLE[prize.name].bg, border: RESULT_STYLE[prize.name].border }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <strong style={{ color: RESULT_STYLE[prize.name].color, fontSize: 12 }}>{prize.name}</strong>
-                    <strong style={{ color: RESULT_STYLE[prize.name].color, fontSize: 12 }}>{prize.count}</strong>
+                    <strong style={{ color: RESULT_STYLE[prize.name].color, fontSize: 13 }}>{prize.name}</strong>
+                    <strong style={{ color: RESULT_STYLE[prize.name].color, fontSize: 13 }}>{prize.count}</strong>
                   </div>
-                  <div style={{ marginTop: 2, fontSize: 10, color: "#555" }}>
-                    남음 {stats.summary[prize.name].remain} / 공개 {stats.summary[prize.name].opened}
-                  </div>
+                  <div style={{ marginTop: 2, fontSize: 10, color: "#555" }}>남음 {stats.summary[prize.name].remain} / 공개 {stats.summary[prize.name].opened}</div>
                 </div>
               ))}
             </div>
@@ -417,20 +456,23 @@ const loginFormStyle = { display: "grid", gap: 10, padding: 18 };
 const fieldLabelStyle = { fontSize: 13, fontWeight: 800, color: "#234" };
 const inputStyle = { width: "100%", border: "1px solid #cfd8e3", borderRadius: 12, padding: "10px 12px", fontSize: 14 };
 const loginButtonStyle = { border: "none", borderRadius: 12, padding: "12px 12px", background: "linear-gradient(180deg, #0a55b0 0%, #093d8f 100%)", color: "#ffea44", fontWeight: 900, fontSize: 15, cursor: "pointer" };
-const loginHintStyle = { fontSize: 12, color: "#667085" };
 const errorStyle = { fontSize: 12, color: "#b42318", fontWeight: 700 };
 const pageStyle = { minHeight: "100vh", background: "linear-gradient(180deg, #f0f4fb 0%, #f7f8fa 100%)", padding: 8, fontFamily: '"Segoe UI", "Malgun Gothic", sans-serif' };
 const shellStyle = { maxWidth: 1560, margin: "0 auto" };
-const headerStyle = { display: "grid", gridTemplateColumns: "190px 1fr 240px", gap: 6, marginBottom: 6, alignItems: "center" };
+const headerStyle = { display: "grid", gridTemplateColumns: "190px 1.4fr 240px", gap: 6, marginBottom: 6, alignItems: "center" };
 const titleBoxStyle = { display: "flex", alignItems: "center", gap: 6, background: "linear-gradient(180deg, #0a55b0 0%, #093d8f 100%)", border: "3px solid #ffe84d", borderRadius: 14, padding: "6px 8px" };
 const titleBadgeStyle = { width: 24, height: 24, borderRadius: 8, background: "#ffea44", color: "#0a55b0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 900 };
 const titleTextStyle = { fontSize: 13, fontWeight: 900, color: "#ffea44" };
-const buttonRowStyle = { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 };
+const buttonRowStyle = { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 5 };
 const primaryButtonStyle = { border: "2px solid #ffe84d", borderRadius: 10, padding: "7px 4px", background: "linear-gradient(180deg, #0a55b0 0%, #093d8f 100%)", color: "#ffea44", fontWeight: 900, fontSize: 11, cursor: "pointer" };
+const saveButtonStyle = { border: "2px solid #0a55b0", borderRadius: 10, padding: "7px 4px", background: "#ffea44", color: "#0a55b0", fontWeight: 900, fontSize: 11, cursor: "pointer" };
 const subButtonStyle = { border: "2px solid #ffd43b", borderRadius: 10, padding: "7px 4px", background: "#ffffff", color: "#394150", fontWeight: 800, fontSize: 11, cursor: "pointer" };
 const miniStatWrapStyle = { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5 };
 const miniStatStyle = { background: "#ffffff", border: "2px solid #d9e0ea", borderRadius: 12, padding: "5px 4px", textAlign: "center", display: "grid", gap: 1, color: "#334155", fontSize: 10 };
 const errorBannerStyle = { background: "#fff1f1", border: "1px solid #ef4444", color: "#b91c1c", borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 800, marginBottom: 6 };
+const saveBannerStyle = { background: "#eefbf3", border: "1px solid #16a34a", color: "#166534", borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 800, marginBottom: 6 };
+const pinPanelStyle = { background: "#ffffff", border: "2px solid #dbe3ee", borderRadius: 16, padding: 10, marginBottom: 6 };
+const pinFormStyle = { display: "grid", gap: 8, maxWidth: 360 };
 const contentStyle = { display: "grid", gridTemplateColumns: "220px 1fr 180px", gap: 6, alignItems: "start" };
 const sidePanelStyle = { background: "#ffffff", border: "2px solid #dbe3ee", borderRadius: 16, padding: 8 };
 const rankPanelStyle = { background: "#ffffff", border: "2px solid #dbe3ee", borderRadius: 16, padding: 8 };
@@ -448,6 +490,7 @@ const boardScrollStyle = { maxHeight: "calc(100vh - 78px)", overflowY: "auto", o
 const boardInnerStyle = { background: "linear-gradient(180deg, #0a55b0 0%, #093d8f 100%)", borderRadius: 16, padding: 6, border: "2px solid rgba(255,255,255,0.25)" };
 const boardGridStyle = { display: "grid", gridTemplateColumns: "repeat(20, 1fr)", gap: 3 };
 const cellStyle = { aspectRatio: "1 / 1", minHeight: 24, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 1 };
+const openedTextStyle = { fontSize: 13, fontWeight: 900, lineHeight: 1.05, textShadow: "0 1px 0 rgba(255,255,255,0.25)" };
 const rankListStyle = { display: "grid", gap: 5 };
 const rankItemStyle = { borderRadius: 10, padding: 6 };
 const jackpotOverlayStyle = { position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", zIndex: 9999, background: "radial-gradient(circle, rgba(255,225,120,0.20) 0%, rgba(255,225,120,0.04) 32%, rgba(255,225,120,0) 68%)" };
